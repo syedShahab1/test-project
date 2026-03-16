@@ -1,4 +1,4 @@
-name: Laravel CI/CD
+name: Laravel CI/CD via Bastion
 
 on:
   push:
@@ -10,12 +10,50 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to EC2
+      # Step 1: Checkout code from GitHub
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # Step 2: Deploy via Bastion to Private EC2
+      - name: Deploy Laravel to Private EC2
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.BASTION_IP }}        # Public IP of Bastion
           username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
+          key: ${{ secrets.BASTION_KEY }}       # Private key for Bastion
           script: |
-            cd /var/www/html/test-project
-            ./deploy.sh
+            echo "Connecting to private EC2..."
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/private-ec2.pem ec2-user@${{ secrets.PRIVATE_EC2_IP }} '
+              set -e
+
+              echo "Navigating to project..."
+              cd /var/www/html/test-project
+
+              echo "Pulling latest code..."
+              git pull origin main
+
+              echo "Installing Composer dependencies..."
+              composer install --no-dev --optimize-autoloader
+
+              echo "Installing Node dependencies..."
+              npm install
+
+              echo "Building assets..."
+              npm run build
+
+              echo "Running migrations..."
+              php artisan migrate --force
+
+              echo "Clearing caches..."
+              php artisan config:clear
+              php artisan route:clear
+              php artisan view:clear
+              php artisan config:cache
+              php artisan route:cache
+
+              echo "Restarting services..."
+              sudo systemctl restart php-fpm
+              sudo systemctl restart nginx
+
+              echo "Deployment completed successfully!"
+            '
