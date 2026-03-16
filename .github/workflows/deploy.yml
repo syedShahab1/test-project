@@ -1,4 +1,4 @@
-name: Laravel CI/CD via Bastion
+name: Laravel CI/CD
 
 on:
   push:
@@ -10,51 +10,68 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout code from GitHub
-      - name: Checkout Code
+      # 1️⃣ Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      # Step 2: Deploy via Bastion to Private EC2
-      - name: Deploy Laravel to Private EC2
+      # 2️⃣ Install Node locally (for Vite build)
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      # 3️⃣ Install NPM dependencies and build assets
+      - name: Build frontend assets
+        run: |
+          npm install
+          npm run build
+
+      # 4️⃣ Build Laravel optimized autoload
+      - name: Install Composer dependencies
+        run: |
+          php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+          php composer-setup.php --install-dir=./ --filename=composer
+          php composer.phar install --no-dev --optimize-autoloader
+
+      # 5️⃣ Copy private EC2 key to Bastion temporarily
+      - name: Copy private EC2 key to Bastion
+        run: |
+          echo "${{ secrets.PRIVATE_EC2_KEY }}" > private-ec2.pem
+          chmod 600 private-ec2.pem
+          scp -o StrictHostKeyChecking=no -i ${{ secrets.BASTION_KEY }} private-ec2.pem ec2-user@${{ secrets.BASTION_IP }}:/home/ec2-user/private-ec2.pem
+
+      # 6️⃣ Deploy via Bastion to private EC2
+      - name: Deploy to private EC2
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.BASTION_IP }}        # Public IP of Bastion
+          host: ${{ secrets.BASTION_IP }}
           username: ec2-user
-          key: ${{ secrets.BASTION_KEY }}       # Private key for Bastion
+          key: ${{ secrets.BASTION_KEY }}
           script: |
-            echo "Connecting to private EC2..."
-            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/private-ec2.pem ec2-user@${{ secrets.PRIVATE_EC2_IP }} '
+            # Copy private key permissions
+            ssh -i /home/ec2-user/private-ec2.pem -o StrictHostKeyChecking=no ec2-user@${{ secrets.PRIVATE_EC2_IP }} '
               set -e
-
-              echo "Navigating to project..."
               cd /var/www/html/test-project
 
-              echo "Pulling latest code..."
-              git fetch origin
-              git reset --hard origin/main
+              echo "Pull latest code..."
+              git reset --hard
+              git clean -fd
+              git pull origin main
 
-              echo "Installing Composer dependencies..."
+              echo "Install Composer dependencies..."
               composer install --no-dev --optimize-autoloader
 
-              echo "Installing Node dependencies..."
+              echo "Build assets on server (optional if not pre-built)..."
               npm install
-
-              echo "Building assets..."
               npm run build
 
-              echo "Running migrations..."
+              echo "Run migrations..."
               php artisan migrate --force
 
-              echo "Clearing caches..."
+              echo "Clear caches..."
               php artisan config:clear
               php artisan route:clear
               php artisan view:clear
-              php artisan config:cache
-              php artisan route:cache
 
-              echo "Restarting services..."
-              sudo systemctl restart php-fpm
-              sudo systemctl restart nginx
-
-              echo "Deployment completed successfully!"
+              echo "Deployment complete!"
             '
